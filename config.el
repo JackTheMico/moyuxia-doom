@@ -401,16 +401,24 @@
   ;; 抢走），打不出 j/k。注意 meow-mode 本身不含 j/k 绑定，真正拦截的是
   ;; state keymaps，所以只关 meow-mode 无效。
   ;; 修复：ghostel buffer 中把 meow 的 state modes 全部 buffer-local 置 nil，
-  ;; 使 emulation-mode-map-alists 对应条目失效；并用 advice 兜底任何途径的
-  ;; (meow-mode 1)（meow-global-mode-enable-in-buffer / meow--init-buffers）。
+  ;; 使 emulation-mode-map-alists 对应条目失效。
+  ;; 注意 ghostel-mode-hook 先于 after-change-major-mode-hook 运行，
+  ;; 在 hook 里直接关 state mode 会被之后的 meow-global-mode-enable-in-buffer
+  ;; 重新打开；故用 run-at-time 0 延迟到调用栈展开后执行。
   (defun +ghostel-suppress-meow-state ()
     (when (derived-mode-p 'ghostel-mode)
       (dolist (mode '(meow-normal-mode meow-motion-mode meow-beacon-mode
                       meow-insert-mode meow-keypad-mode))
         (when (boundp mode)
           (set (make-local-variable mode) nil)))))
-  (advice-add #'meow-mode :after #'+ghostel-suppress-meow-state)
-  (add-hook! 'ghostel-mode-hook #'+ghostel-suppress-meow-state)
+  (add-hook! 'ghostel-mode-hook
+    (lambda ()
+      (let ((buf (current-buffer)))
+        (run-at-time 0 nil
+          (lambda ()
+            (when (buffer-live-p buf)
+              (with-current-buffer buf
+                (+ghostel-suppress-meow-state))))))))
   (setopt ghostel-keymap-exceptions
           (cl-union '("C-s" "C-k" "M-p" "M-n")
                     ghostel-keymap-exceptions :test #'equal))
