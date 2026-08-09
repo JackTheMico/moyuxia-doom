@@ -265,6 +265,13 @@
     '("j" . +meow/insert-escape)
     '("k" . +meow/insert-escape)))
 
+;; ---- magit: meow 拦截 k 键（NORMAL 态 meow-prev 优先于 magit-mode-map 的
+;; magit-delete-thing/discard）。magit 自带完整键位，直接进入 EMACS state
+;; （无 meow 绑定，仅保留 M-SPC keypad 与 C-] 临时切换）。
+;; 沿 derived-mode-parent 递归匹配，覆盖 status/log/diff/process 等全部派生 mode。
+(after! meow
+  (add-to-list 'meow-mode-state-list '(magit-mode . emacs)))
+
 ;; ---- org-mode: meow insert 自动切换 fcitx5 输入法 ----
 ;; 进入 insert mode → 激活中文输入（fcitx5-remote -o）
 ;; 退出 insert mode → 切回英文（fcitx5-remote -c）
