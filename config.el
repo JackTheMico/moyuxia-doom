@@ -214,28 +214,28 @@
 ;; （但 n 前缀仍有 Doom 绑定，必须用无 desc 的 :prefix "n"）。
 (map! :leader
       (:prefix "n"
-       (:prefix ("j" . "journal")
-        :desc "Open journal"          "j" #'vulpea-journal
-        :desc "Today"                 "t" #'vulpea-journal-today
-        :desc "Previous"              "p" #'vulpea-journal-previous
-        :desc "Next"                  "n" #'vulpea-journal-next)
-       (:prefix ("r" . "vulpea")
-        :desc "Find note"            "f" #'vulpea-find
-        :desc "Find backlink"        "b" #'vulpea-find-backlink
-        :desc "Insert link"          "i" #'vulpea-insert
-        :desc "Sync database"        "s" #'vulpea-db-sync-full-scan
-        :desc "Graph"                "G" #'vulpea-graph
-        :desc "Sidebar toggle"       "R" #'vulpea-ui-sidebar-toggle
-        :desc "Collection"           "c" #'vulpea-ui-collection
-        :desc "New note from entry"  "n" #'my/org-inbox-to-note
-        :desc "Add tag"              "t" #'vulpea-buffer-tags-add
-        :desc "Remove tag"           "T" #'vulpea-buffer-tags-remove)
-       ;; PARA 导航（vulpea-para）。n 前缀下 "a" 已被 org-agenda 占用
-       ;; （+emacs-bindings），故 find-area 用大写 A；p / P 空闲。
-       ;; meow Keypad 保留键 m / g / 空格 均不涉及，安全。
-       :desc "Find area"             "A" #'vulpea-para-find-area
-       :desc "Find project"          "p" #'vulpea-para-find-project
-       :desc "New project"           "P" #'vulpea-para-capture-project))
+               (:prefix ("j" . "journal")
+                :desc "Open journal"          "j" #'vulpea-journal
+                :desc "Today"                 "t" #'vulpea-journal-today
+                :desc "Previous"              "p" #'vulpea-journal-previous
+                :desc "Next"                  "n" #'vulpea-journal-next)
+               (:prefix ("r" . "vulpea")
+                :desc "Find note"            "f" #'vulpea-find
+                :desc "Find backlink"        "b" #'vulpea-find-backlink
+                :desc "Insert link"          "i" #'vulpea-insert
+                :desc "Sync database"        "s" #'vulpea-db-sync-full-scan
+                :desc "Graph"                "G" #'vulpea-graph
+                :desc "Sidebar toggle"       "R" #'vulpea-ui-sidebar-toggle
+                :desc "Collection"           "c" #'vulpea-ui-collection
+                :desc "New note from entry"  "n" #'my/org-inbox-to-note
+                :desc "Add tag"              "t" #'vulpea-buffer-tags-add
+                :desc "Remove tag"           "T" #'vulpea-buffer-tags-remove)
+               ;; PARA 导航（vulpea-para）。n 前缀下 "a" 已被 org-agenda 占用
+               ;; （+emacs-bindings），故 find-area 用大写 A；p / P 空闲。
+               ;; meow Keypad 保留键 m / g / 空格 均不涉及，安全。
+               :desc "Find area"             "A" #'vulpea-para-find-area
+               :desc "Find project"          "p" #'vulpea-para-find-project
+               :desc "New project"           "P" #'vulpea-para-capture-project))
 
 
 ;; jk 退出 insert 模式 (vim 风格)
@@ -257,6 +257,23 @@
     '("j" . +meow/insert-escape)
     '("k" . +meow/insert-escape)))
 
+;; ---- org-mode: meow insert 自动切换 fcitx5 输入法 ----
+;; 进入 insert mode → 激活中文输入（fcitx5-remote -o）
+;; 退出 insert mode → 切回英文（fcitx5-remote -c）
+;; 仅在 org-mode 生效；fcitx5 未运行时静默跳过。
+(when (executable-find "fcitx5-remote")
+  (defun +fcitx5/org-insert-activate ()
+    "org-mode 进入 insert mode 时激活 fcitx5 中文输入。"
+    (when (derived-mode-p 'org-mode)
+      (call-process "fcitx5-remote" nil nil nil "-o")))
+
+  (defun +fcitx5/org-insert-deactivate ()
+    "org-mode 退出 insert mode 时切回英文输入。"
+    (when (derived-mode-p 'org-mode)
+      (call-process "fcitx5-remote" nil nil nil "-c")))
+
+  (add-hook 'meow-insert-enter-hook #'+fcitx5/org-insert-activate)
+  (add-hook 'meow-insert-exit-hook #'+fcitx5/org-insert-deactivate))
 
 ;; Whenever you reconfigure a package, make sure to wrap your config in an
 ;; `with-eval-after-load' block, otherwise Doom's defaults may override your
@@ -415,10 +432,10 @@
     (lambda ()
       (let ((buf (current-buffer)))
         (run-at-time 0 nil
-          (lambda ()
-            (when (buffer-live-p buf)
-              (with-current-buffer buf
-                (+ghostel-suppress-meow-state))))))))
+                     (lambda ()
+                       (when (buffer-live-p buf)
+                         (with-current-buffer buf
+                           (+ghostel-suppress-meow-state))))))))
   (setopt ghostel-keymap-exceptions
           (cl-union '("C-s" "C-k" "M-p" "M-n")
                     ghostel-keymap-exceptions :test #'equal))
