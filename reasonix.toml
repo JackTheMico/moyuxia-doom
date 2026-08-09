@@ -1,0 +1,2 @@
+[permissions]
+allow = ["Bash=rtk grep -n 'b\\b' /home/jackwy/.config/emacs/sources/doom+/modules/config/default/+emacs-bindings.el | head -30", "Bash=rtk grep -n ':config\\|+bindings\\|default' /home/jackwy/.config/doom/init.el | head", "Edit", "Bash=emacs --batch -Q --eval \"(progn (find-file \\\"/home/jackwy/.config/doom/config.el\\\") (check-parens) (message \\\"PARENS-OK\\\"))\" 2>&1 | tail -3", "Bash=emacs --batch -Q --eval \"(progn (find-file \\\"/home/jackwy/.config/doom/config.el\\\") (check-parens) (message \\\"PARENS-OK\\\"))\" 2>&1 | tail -2"]
