@@ -159,12 +159,20 @@
 ;;   3. vulpea-para-refile-mode + org-refile-targets 换成官方 spec：
 ;;      目标 = 整个 vault（gtd + roam 全部笔记），数据库查询回答，
 ;;      不访问文件；'title 按标题补全；allow-creating-parent-nodes
-;;   4. org-capture-templates 追加 "p"（PARA project）/"m"（PARA
-;;      meeting）模板，Doom 默认模板（t/n → gtd/inbox.org）不受影响
+;;   4. org-capture-templates 追加 "P"（PARA project）/"M"（PARA
+;;      meeting）模板，执行后改键以避开 Doom 默认 "p" 键的冲突
 (use-package! vulpea-para
   :after vulpea
   :config
   (vulpea-para-setup-defaults)
+  ;; vulpea-para-setup-defaults 往 org-capture-templates 追加的 "p" 键
+  ;; 与 Doom 默认的 "p" 父级分组（Templates for projects → pt/pn/pc）
+  ;; 冲突，导致 org-capture 选 "p" 时匹配到 Doom 侧 → 触发
+  ;; +org--capture-local-root → "Couldn't detect a project"。
+  ;; 处理：把 vulpea-para 追加的 "p" 键名就地改为 "P"（大写），同时
+  ;; 把 "m" 改为 "M" 保持一致性（大写出 PARA 专属模板）。
+  (setf (car (assoc "p" org-capture-templates)) "P")
+  (setf (car (assoc "m" org-capture-templates)) "M")
   ;; gtd 任务文件永远算 open work → 常驻 agenda。
   ;; PARA 的 open-work 判定认 TODO state / REFILE tag / active timestamp，
   ;; 而 gtd 的写法是 "[ ] 标题 + SCHEDULED:"，不满足；且文件级 note 必须
