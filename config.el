@@ -9,6 +9,28 @@
 (setq user-full-name "Jack Wenyoung"
       user-mail-address "dlwxxxdlw@gmail.com")
 
+;; mu4e 拉取 Gmail：用 gmi (lieer) 而不是 mbsync/offlineimap
+;; gmi 需在 ~/mail（含 .gmailieer.json）运行，且要走本地代理，
+;; 与 ~/.config/systemd/user/gmi-sync.service 保持一致。
+(after! mu4e
+  (setq mu4e-get-mail-command
+        "cd ~/mail && env HTTPS_PROXY=http://127.0.0.1:7890 HTTP_PROXY=http://127.0.0.1:7890 /usr/bin/gmi sync")
+  (mu4e-bookmark-define "maildir:/sent"     "Gmail Sent" ?s)
+  (mu4e-bookmark-define "maildir:/163/Sent" "163 Sent"   ?S)
+  (dolist (mode '(mu4e-main-mode mu4e-headers-mode mu4e-view-mode))
+    (add-to-list 'meow-mode-state-list (cons mode 'emacs)))
+  ;; Gmail SMTP — 需要 app password 存入 ~/.authinfo.gpg
+  ;; machine smtp.gmail.com login dlwxxxdlw@gmail.com port 587 password <16位app密码>
+  (setq smtpmail-smtp-server "smtp.gmail.com"
+        smtpmail-smtp-service 587
+        smtpmail-stream-type 'starttls
+        smtpmail-smtp-user "dlwxxxdlw@gmail.com"
+        message-send-mail-function #'smtpmail-send-it)
+  ;; 发送后异步标记 parent flags，避免同步阻塞
+  (advice-add 'mu4e--set-parent-flags :around
+              (lambda (fn path)
+                (run-at-time 0 nil fn path))))
+
 ;; Doom exposes five (optional) variables for controlling fonts in Doom:
 ;;
 ;; - `doom-font' -- the primary font to use
@@ -41,7 +63,9 @@
 ;; There are two ways to load a theme. Both assume the theme is installed and
 ;; available. You can either set `doom-theme' or manually load a theme with the
 ;; `load-theme' function. This is the default:
-(setq doom-theme 'doom-dracula)
+;; (setq doom-theme 'doom-dacula)
+(add-to-list 'custom-theme-load-path "~/.config/emacs/themes/")
+(load-theme 'noctalia t)
 
 ;; This determines the style of line numbers in effect. If set to `nil', line
 ;; numbers are disabled. For relative line numbers, set this to `relative'.
@@ -108,6 +132,19 @@
           (org-cycle))))
      (t (org-return))))
   (map! :map org-mode-map "RET" #'+org-ret-cycle-or-return))
+
+;; Tex Live 2026 移除了 ulem.sty（Arch 的任何 texlive 包都不再带它），而本版
+;; org 的默认 latex 包列表仍硬编码 ("normalem" "ulem" t)，导出 PDF 时无条件
+;; \usepackage[normalem]{ulem} 导致 "File 'ulem.sty' not found"。这里移除。
+;; ponytail: 最小修复；代价是 org 的 +下划线+/+删除线+ 标记在 PDF 里不再加
+;; 下划线（文本仍保留）。需要该功能时再补 \usepackage{soulutf8}。
+(after! org
+  (setq org-latex-default-packages-alist
+        (cl-remove '("normalem" "ulem" t) org-latex-default-packages-alist
+                   :test #'equal)
+        ;; 默认用 xelatex 编译：中文文档必选（pdflatex 对中文/CJK 不支持）。
+        ;; 也兼容纯英文导出，无副作用。
+        org-latex-compiler "xelatex"))
 ;; ---- vulpea 知识库（替代 org-roam）----
 ;; vulpea 是纯 org + sqlite 的笔记索引层（v2 完全独立，不依赖 org-roam）；
 ;; vulpea-ui 提供 sidebar（stats / outline / backlinks / links 等 widget）；
@@ -244,6 +281,95 @@
                :desc "Find area"             "A" #'vulpea-para-find-area
                :desc "Find project"          "p" #'vulpea-para-find-project
                :desc "New project"           "P" #'vulpea-para-capture-project))
+
+
+;; ---- 长篇小说写作（org-novelist + olivetti + wc-mode）----
+;; 小说项目独立于 vulpea/gtd，放 ~/novels/ 下，单独 git 仓库。
+;; 所有写作助手（olivetti 居中、wc-mode 实时字数）只在此目录下的
+;; org 文件里自动开启；gtd/roam/mu4e 的 org buffer 完全不受影响。
+
+(defvar my/novels-dir (expand-file-name "~/novels/")
+  "小说项目根目录。org-novelist 项目也放这里。")
+
+(defun my/novel-buffer-p ()
+  "当前 buffer 文件是否在 `my/novels-dir' 下。"
+  (and buffer-file-name
+       (file-in-directory-p buffer-file-name my/novels-dir)))
+
+;; 1. 项目脚手架：角色 / 地点 / 道具索引
+(use-package! org-novelist
+  :defer t
+  :config
+  (setq org-novelist-author "Jack Wenyoung"))
+
+;; 2. 轻量专注：olivetti 居中（只在小说文件自动开）
+(use-package! olivetti
+  :hook (org-mode . my/novel-maybe-olivetti)
+  :config
+  (defun my/novel-maybe-olivetti ()
+    (when (my/novel-buffer-p)
+      (olivetti-mode 1)))
+  (setq-default olivetti-body-width 80))
+
+;; 3. 实时字数（只在小说文件自动开）
+;;    CJK 字数：Emacs 27+ 的 count-words 将汉字视为 word constituent，
+;;    wc-mode 底层调用它，中文计数可用。日更目标通过
+;;    M-x customize-group RET wc 设置。
+(use-package! wc-mode
+  :hook (org-mode . my/novel-maybe-wc)
+  :config
+  (defun my/novel-maybe-wc ()
+    (when (my/novel-buffer-p)
+      (wc-mode 1))))
+
+;; 4. 章节字数统计（手动调用）
+(use-package! org-wc
+  :defer t)
+
+;; 5. 导出为书稿 PDF（中文用 ctexbook，复用 xelatex + ctex 环境）
+;;    org-latex-default-class / org-latex-classes 定义在 ox-latex.el，
+;;    必须等 ox-latex 加载后再改（after! org 只等 org.el，启动时会 void-variable）。
+(after! ox-latex
+  ;; 默认文档类 ctexart：中文笔记直接导出；无中文时 ctex 自动降级。
+  (setq org-latex-default-class "ctexart")
+  (add-to-list 'org-latex-classes
+               '("novel-book"
+                 "\\documentclass[12pt]{ctexbook}
+\\usepackage[margin=1in]{geometry}
+\\usepackage{mathptmx}"
+                 ("\\chapter{%s}" . "\\chapter*{%s}")
+                 ("\\section{%s}" . "\\section*{%s}"))))
+
+;; 6. 一键开写：打开 ~/novels/ 目录（dirvish），从那里进具体小说
+(defun my/start-novel-writing ()
+  "打开小说项目目录，开始写作。"
+  (interactive)
+  (find-file my/novels-dir)
+  (message "开始写作，祝灵感涌现！"))
+
+;; 7. 日更提交：在 ~/novels/ git 仓库里一键 commit
+(defun my/novel-daily-commit (msg)
+  "提交今日日更到 ~/novels/ 的 git 仓库。
+默认提交信息带日期；C-u 前缀可自定义。"
+  (interactive
+   (list (read-string "提交信息: "
+                      (format "日更完成 %s"
+                              (format-time-string "%Y-%m-%d")))))
+  (let ((default-directory my/novels-dir))
+    (shell-command (format "git add . && git commit -m %S" msg))
+    (message "日更已提交：%s" msg)))
+
+;; 8. 键位：SPC n v = novel 子前缀
+;;    org-novelist 的 autoload 命令是 org-novelist-new-story（带连字符），
+;;    不是 orgn-new-story（那是包内部 defun 名，未 autoload）。
+(map! :leader
+      (:prefix ("n" . "notes")
+       (:prefix ("v" . "novel")
+        :desc "新建故事"      "n" #'org-novelist-new-story
+        :desc "新建角色"      "c" #'org-novelist-new-character
+        :desc "一键开写"      "w" #'my/start-novel-writing
+        :desc "日更提交"      "s" #'my/novel-daily-commit
+        :desc "章节字数统计"   "W" #'org-wc-display)))
 
 
 ;; jk 退出 insert 模式 (vim 风格)
@@ -646,3 +772,19 @@
 ;; 启动后稍作等待再查一次；之后每 5 分钟复查（emacsclient 连上时 idle timer 会触发）
 (run-with-idle-timer 10 nil #'my/doom-check-stale-config)
 (run-with-timer 300 300 #'my/doom-check-stale-config)
+
+;; ---------------------------------------------------------------------------
+;; yasnippet 修复：python-ts-mode 等 treesit 模式的 snippets 无法触发
+;;
+;; 背景：python 的 snippets 全部注册在 `python-mode' 表下，而 Emacs 30 的
+;; python-ts-mode 通过 `derived-mode-add-parents' 继承 python-mode。yasnippet
+;; 用 JIT 懒加载（`yas--scheduled-jit-loads'）——表只在模式激活时加载。
+;; 若 buffer 的 `yas-minor-mode' 在 JIT 调度完成前已开启（如 daemon 启动
+;; 早期恢复的 buffer），之后切到 python-ts-mode 不会重新触发 JIT 消费，
+;; 导致 `python-mode' 表永不加载 → snippets 无法展开（TAB 落到缩进）。
+;;
+;; 修复：每次 major-mode 设置/切换时都消费 JIT。`yas--load-pending-jits'
+;; 幂等（已加载的表自动跳过），对任何时序都安全。
+;; ---------------------------------------------------------------------------
+(after! yasnippet
+  (add-hook 'after-change-major-mode-hook #'yas--load-pending-jits))

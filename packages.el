@@ -67,3 +67,10 @@
 
 ;; ---- 自动保存（切 buffer/失焦/空闲时写原文件）----
 (package! super-save)
+
+;; ---- 长篇小说写作（org-novelist + olivetti + wc-mode + org-wc）----
+;; org-novelist 不在 MELPA，从 GitHub 装；其余三个在 MELPA。
+(package! org-novelist :recipe (:host github :repo "sympodius/org-novelist"))
+(package! olivetti)
+(package! wc-mode)
+(package! org-wc)
