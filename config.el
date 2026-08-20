@@ -547,6 +547,9 @@
        :desc "Ghostel project buffers"  "M" #'ghostel-project-list-buffers))
 (use-package! ghostel
   :config
+  ;; 默认 shell 用 fish（登录 shell，匹配真实终端的体验）。
+  ;; ghostel-shell 独立于顶层的 shell-file-name（后者仍用 bash，影响 shell-command）。
+  (setopt ghostel-shell (list (executable-find "fish") "--login"))
   ;; semi-char 模式下 C-s/C-k/M-p/M-n 默认被发给终端；加入
   ;; ghostel-keymap-exceptions 让它们 pass through 给 Emacs。
   ;; setopt 走 custom :set → 触发 ghostel--rebuild-semi-char-keymap 重建 keymap，
