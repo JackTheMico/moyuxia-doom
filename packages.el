@@ -74,3 +74,9 @@
 (package! olivetti)
 (package! wc-mode)
 (package! org-wc)
+
+;; ---- org buffer 现代风格美化 ----
+;; org-modern 在 MELPA，用 font-lock + box text property 美化 headline /
+;; TODO 关键字 / 标签 / 时间戳 / 表格 / src block fringe，可替代
+;; org-superstar 与 org-bullets（比 svg-tag-mode 高效，不生成图片）。
+(package! org-modern)

@@ -9,12 +9,24 @@
 (setq user-full-name "Jack Wenyoung"
       user-mail-address "dlwxxxdlw@gmail.com")
 
-;; mu4e 拉取 Gmail：用 gmi (lieer) 而不是 mbsync/offlineimap
-;; gmi 需在 ~/mail（含 .gmailieer.json）运行，且要走本地代理，
-;; 与 ~/.config/systemd/user/gmi-sync.service 保持一致。
+;; mu4e 邮件架构说明：
+;;   拉信统一走 systemd user 服务（gmi-sync 拉 Gmail、mbsync-163 拉 163；
+;;   另有 10 分钟 timers 兜底，Emacs 不开时也会拉）。mu4e 按 U 时通过
+;;   `systemctl start --wait` 同步等这两个服务跑完再重建索引——systemd
+;;   对同名 unit 单实例串行，不会与 timers 里的 gmi 并发冲突。
+;;   索引更新后，由 mu 1.10+ 内置通知（D-Bus）弹出新邮件桌面提醒。
+;;   注意：通知在 mu4e 启动（M-x mu4e）后才生效，且围绕"favorite bookmark"
+;;   （默认即 Unread messages）的新增未读数计算。
 (after! mu4e
   (setq mu4e-get-mail-command
-        "cd ~/mail && env HTTPS_PROXY=http://127.0.0.1:7890 HTTP_PROXY=http://127.0.0.1:7890 /usr/bin/gmi sync")
+        ;; --wait：等拉信服务结束后 mu4e 才接着重建索引
+        "systemctl --user start --wait gmi-sync.service mbsync-163.service"
+        mu4e-update-interval 300      ; 每 5 分钟拉信 + 重建索引 + 检查新邮件
+        mu4e-notification-support t)  ; mu 1.10+ 内置桌面通知
+  ;; Doom 的 mu4e 模块默认启用了 mu4e-alert（原仓库 2019 年停更，mu 官方
+  ;; 确认自 mu 1.6 起不可用，Doom 靠 defadvice 续命），它与内置通知并存会
+  ;; 双重弹窗，这里摘掉它的通知钩子。
+  (remove-hook 'mu4e-index-updated-hook #'mu4e-alert-notify-unread-mail-async)
   (mu4e-bookmark-define "maildir:/sent"     "Gmail Sent" ?s)
   (mu4e-bookmark-define "maildir:/163/Sent" "163 Sent"   ?S)
   (dolist (mode '(mu4e-main-mode mu4e-headers-mode mu4e-view-mode))
@@ -43,8 +55,8 @@
 ;; See 'C-h v doom-font' for documentation and more examples of what they
 ;; accept. For example:
 ;;
-(setq doom-font (font-spec :family "Maple Mono NF CN" :size 23 :weight 'Medium)
-      doom-variable-pitch-font (font-spec :family "LXGW WenKai Screen" :size 21)
+(setq doom-font (font-spec :family "Maple Mono NF CN" :size 25 :weight 'Medium)
+      doom-variable-pitch-font (font-spec :family "LXGW WenKai Screen" :size 23)
       doom-big-font (font-spec :family "Maple Mono NF CN" :size 36)
       doom-symbol-font (font-spec :family "Maple Mono NF CN")
       doom-serif-font (font-spec :family "Noto Serif CJK SC")
@@ -208,8 +220,10 @@
   ;; +org--capture-local-root → "Couldn't detect a project"。
   ;; 处理：把 vulpea-para 追加的 "p" 键名就地改为 "P"（大写），同时
   ;; 把 "m" 改为 "M" 保持一致性（大写出 PARA 专属模板）。
-  (setf (car (assoc "p" org-capture-templates)) "P")
-  (setf (car (assoc "m" org-capture-templates)) "M")
+  (when-let ((entry (assoc "p" org-capture-templates)))
+    (setf (car entry) "P"))
+  (when-let ((entry (assoc "m" org-capture-templates)))
+    (setf (car entry) "M"))
   ;; gtd 任务文件永远算 open work → 常驻 agenda。
   ;; PARA 的 open-work 判定认 TODO state / REFILE tag / active timestamp，
   ;; 而 gtd 的写法是 "[ ] 标题 + SCHEDULED:"，不满足；且文件级 note 必须
@@ -288,7 +302,7 @@
 ;; 所有写作助手（olivetti 居中、wc-mode 实时字数）只在此目录下的
 ;; org 文件里自动开启；gtd/roam/mu4e 的 org buffer 完全不受影响。
 
-(defvar my/novels-dir (expand-file-name "~/novels/")
+(defvar my/novels-dir (expand-file-name "~/org/novels/")
   "小说项目根目录。org-novelist 项目也放这里。")
 
 (defun my/novel-buffer-p ()
@@ -364,13 +378,12 @@
 ;;    不是 orgn-new-story（那是包内部 defun 名，未 autoload）。
 (map! :leader
       (:prefix ("n" . "notes")
-       (:prefix ("v" . "novel")
-        :desc "新建故事"      "n" #'org-novelist-new-story
-        :desc "新建角色"      "c" #'org-novelist-new-character
-        :desc "一键开写"      "w" #'my/start-novel-writing
-        :desc "日更提交"      "s" #'my/novel-daily-commit
-        :desc "章节字数统计"   "W" #'org-wc-display)))
-
+               (:prefix ("v" . "novel")
+                :desc "新建故事"      "n" #'org-novelist-new-story
+                :desc "新建角色"      "c" #'org-novelist-new-character
+                :desc "一键开写"      "w" #'my/start-novel-writing
+                :desc "日更提交"      "s" #'my/novel-daily-commit
+                :desc "章节字数统计"   "W" #'org-wc-display)))
 
 ;; jk 退出 insert 模式 (vim 风格)
 (after! meow
@@ -791,3 +804,140 @@
 ;; ---------------------------------------------------------------------------
 (after! yasnippet
   (add-hook 'after-change-major-mode-hook #'yas--load-pending-jits))
+
+;; ---- Forge (GitHub Issues / PR / Notifications) ----
+(after! forge
+  (setq forge-owned-accounts '(("JackTheMico"))))
+
+;; Forge 专属 buffer 与 Meow 兼容：进入 EMACS state 避免 Meow 拦截单键操作（c, e, k, d, m, q 等）
+(after! meow
+  (dolist (mode '(forge-topic-mode
+                  forge-topics-mode
+                  forge-notifications-mode
+                  forge-repositories-mode))
+    (add-to-list 'meow-mode-state-list (cons mode 'emacs))))
+
+;; 便捷 Leader 键（SPC v 为 Doom +emacs-bindings 下的版本控制前缀）
+(map! :leader
+      (:prefix "v"
+       :desc "List notifications" "N" #'forge-list-notifications
+       :desc "List issues"        "I" #'forge-list-issues
+       :desc "List pull requests" "P" #'forge-list-pullreqs
+       :desc "Forge dispatch"     "@" #'forge-dispatch
+       :desc "Forge dispatch"     "'" #'forge-dispatch))
+
+;; ============================================================================
+;; CloudFlare-ImgBed：上传图片并插入 URL（写 firefly 博客时自动图床）
+;; 依赖：系统已装 curl；Emacs 27+（原生 json-parse-buffer）
+;;   SPC i u  = 选本地图片文件异步上传并插入链接（不阻塞 Emacs）
+;;   SPC i p  = 粘贴剪贴板图片（Wayland 用 wl-paste / X11 用 xclip）并插入
+;; token 从 ~/.authinfo.gpg 读取（machine = my/imgbed-auth-host），明文不落配置。
+;; 图床 API 契约（已核对源码）：POST /upload，multipart 字段名 file，
+;;   ?returnFormat=full 返回绝对 URL，响应为 JSON 数组 [{ "src": "<url>" }]。
+;; 参考调研：.workbuddy/research/cloudflare-imgbed-emacs-upload.md
+;; ============================================================================
+(defcustom my/imgbed-endpoint "https://jackwyimgbed.dlwxxxdlw.workers.dev/upload"
+  "CloudFlare-ImgBed 上传端点。本仓库为 /upload（Cloudflare Pages/Worker 路由）。")
+
+(defcustom my/imgbed-auth-host "jackwyimgbed.dlwxxxdlw.workers.dev"
+  "auth-source 主机名，对应 ~/.authinfo.gpg 中 `machine' 字段。
+Token 在每次上传时惰性读取，避免 Emacs 启动阶段触发 gpg 解密而卡住。")
+
+(defcustom my/imgbed-token nil
+  "API Token 覆盖值。nil（默认）= 上传时从 ~/.authinfo.gpg 读取。
+直接填字面量也可，但不推荐（明文写在配置里）。")
+
+(defcustom my/imgbed-authcode nil
+  "用户端 authCode（若不用 API Token，则在后台 Security 配置后填这里，或用 ?authCode= 头）。")
+
+(defun my/imgbed--token ()
+  "返回可用的 API Token：优先 `my/imgbed-token'，否则从 auth-source 读取。
+对应 ~/.authinfo.gpg 中 machine = `my/imgbed-auth-host' 的 password 字段。
+使用 auth-source-search 底层 API，避免依赖 auth-source-password 的 autoload
+（后者在 -Q/某些环境下未注册会导致 void-function）。secret 可能为函数（gpg）或
+字符串（明文），二者都处理。"
+  (or my/imgbed-token
+      (ignore-errors
+        (require 'auth-source nil t)
+        (let* ((entries (auth-source-search :host my/imgbed-auth-host :max 1))
+               (secret (plist-get (car entries) :secret)))
+          (if (functionp secret) (funcall secret) secret)))))
+
+(defun my/imgbed--extract-url (json-str)
+  "从 CloudFlare-ImgBed 响应 JSON 数组中提取第一项的 src（或 publicUrl）。
+解析失败（非预期响应）时返回 nil，由调用方处理。"
+  (condition-case nil
+      (let* ((data (with-temp-buffer
+                     (insert json-str)
+                     (goto-char (point-min))
+                     (json-parse-buffer :object-type 'alist :array-type 'list)))
+             (first (car data))
+             (src (alist-get 'src first)))
+        (or src (alist-get 'publicUrl first)))
+    (error nil)))
+
+(defun my/imgbed-upload-async (file &optional delete-after)
+  "异步上传 FILE 到图床；完成后回到调用处的 buffer/point 插入链接。
+DELETE-AFTER 非 nil 时，上传结束（无论成败）删除该临时文件。
+Org mode 插 [[url][name]]，其它模式插 ![name](url)。不阻塞 Emacs。"
+  (let* ((buf (current-buffer))
+         (pt (point))
+         (mode (if (derived-mode-p 'org-mode) 'org 'md))
+         (name (file-name-nondirectory file))
+         (url (concat my/imgbed-endpoint "?returnFormat=full"))
+         (token (my/imgbed--token))
+         (args (list "-s" "-F" (concat "file=@" (expand-file-name file)))))
+    (when token
+      (setq args (append args (list "-H" (concat "Authorization: Bearer " token)))))
+    (when my/imgbed-authcode
+      (setq args (append args (list "-H" (concat "authCode: " my/imgbed-authcode)))))
+    (setq args (append args (list url)))
+    (message "Uploading %s ..." name)
+    (make-process
+     :name "imgbed-upload"
+     :buffer (generate-new-buffer " *imgbed-upload*")
+     :command (cons "curl" args)
+     :sentinel
+     (lambda (proc _event)
+       (unless (process-live-p proc)
+         (let* ((status (process-exit-status proc))
+                (out (with-current-buffer (process-buffer proc)
+                       (buffer-string)))
+                (url (my/imgbed--extract-url out)))
+           (kill-buffer (process-buffer proc))
+           (when delete-after (ignore-errors (delete-file file)))
+           (if (or (/= 0 status) (null url) (string-empty-p (string-trim url)))
+               (message "图床上传失败（curl exit %d）：%s" status (string-trim out))
+             (if (buffer-live-p buf)
+                 (with-current-buffer buf
+                   (save-excursion
+                     (goto-char pt)
+                     (insert (if (eq mode 'org)
+                                 (format "[[%s][%s]]" url name)
+                               (format "![%s](%s)" name url)))))
+               (message "原 buffer 已关闭，URL：%s" url))
+             (message "Inserted %s" url))))))))
+
+(defun my/imgbed-insert (file)
+  "选本地图片文件异步上传并在 point 插入链接。"
+  (interactive "fImage file: ")
+  (my/imgbed-upload-async (expand-file-name file)))
+
+(defun my/imgbed-paste-clipboard ()
+  "把剪贴板里的图片落临时文件并异步上传，在 point 插入 URL。
+Wayland 用 wl-paste，X11 用 xclip；二者均需在系统上安装。"
+  (interactive)
+  (let ((tmp (make-temp-file "imgbed-" nil ".png")))
+    (if (getenv "WAYLAND_DISPLAY")
+        (call-process "wl-paste" nil nil nil "-t" "image/png" "-o" tmp) ; Wayland
+      (call-process "xclip" nil nil nil                          ; X11
+                    "-selection" "clipboard" "-t" "image/png" "-o" tmp))
+    (if (and (file-exists-p tmp) (> (file-attribute-size (file-attributes tmp)) 0))
+        (my/imgbed-upload-async tmp t)
+      (user-error "剪贴板中没有图片（或 wl-paste/xclip 未安装）"))))
+
+(map! :leader
+      (:prefix ("i" . "imgbed")
+       :desc "Upload image file & insert URL" "u" #'my/imgbed-insert
+       :desc "Paste clipboard image & insert URL" "p" #'my/imgbed-paste-clipboard))
+
