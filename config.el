@@ -1020,6 +1020,29 @@ CUSTOM-ALT 优先作为 Markdown alt 描述；若未提供则提示输入。"
       (message "未能从当前路径识别文章 slug，打开博客主页: http://localhost:4321")
       (browse-url "http://localhost:4321"))))
 
+;; Astro 博客项目根目录与动态创建
+(defcustom +firefly-blog-dir (expand-file-name "~/codes/Firefly")
+  "Firefly Astro 博客项目根目录路径。")
+
+(defun +firefly/new-dynamic ()
+  "在 Firefly 博客的 dynamic 目录下新建时间戳命名的动态文件，并自动填充 Frontmatter。
+打开后光标停留在正文首行，并自动进入 Meow INSERT 态。"
+  (interactive)
+  (let* ((dynamic-dir (expand-file-name "src/content/dynamic" +firefly-blog-dir))
+         (time (current-time))
+         (filename (format-time-string "%Y-%m-%d-%H%M%S.md" time))
+         (published (format-time-string "%Y-%m-%d %H:%M:%S" time))
+         (filepath (expand-file-name filename dynamic-dir)))
+    (unless (file-directory-p dynamic-dir)
+      (make-directory dynamic-dir t))
+    (find-file filepath)
+    (when (= (buffer-size) 0)
+      (insert (format "---\npublished: %s\n---\n\n" published))
+      (goto-char (point-max))
+      (when (fboundp 'meow-insert-mode)
+        (meow-insert-mode 1))
+      (message "已创建动态: %s" filename))))
+
 ;; ============================================================================
 ;; Meow 键位绑定：NORMAL 态单键 Localleader (,) 与 Markdown 博客专属前缀
 ;; ============================================================================
@@ -1034,12 +1057,17 @@ CUSTOM-ALT 优先作为 Markdown alt 描述；若未提供则提示输入。"
       :desc "粘贴本地 Page Bundle 图片" "P" #'+firefly/markdown-paste-clipboard-image
       (:prefix ("u" . "upload-imgbed")
        :desc "上传剪贴板图片至图床" "c" #'+firefly/imgbed-upload-clipboard
-       :desc "选择本地图片上传至图床" "f" #'+firefly/imgbed-upload-file))
+       :desc "选择本地图片上传至图床" "f" #'+firefly/imgbed-upload-file)
+      (:prefix ("n" . "new")
+       :desc "新建 Firefly 动态" "d" #'+firefly/new-dynamic))
 
 ;; 全局 SPC i 图床快捷入口保留
 (map! :leader
       (:prefix ("i" . "imgbed")
        :desc "Upload image file & insert URL" "u" #'+firefly/imgbed-upload-file
-       :desc "Paste clipboard image & insert URL" "p" #'+firefly/imgbed-upload-clipboard))
+       :desc "Paste clipboard image & insert URL" "p" #'+firefly/imgbed-upload-clipboard)
+      (:prefix "n"
+       :desc "新建 Firefly 动态" "d" #'+firefly/new-dynamic))
+
 
 
