@@ -1,0 +1,17 @@
+# -*- mode: snippet -*-
+# name: Firefly Astro Post
+# key: post
+# condition: (derived-mode-p 'markdown-mode 'gfm-mode)
+# --
+---
+title: ${1:文章标题}
+published: `(format-time-string "%Y-%m-%d")`
+description: "${2:简短文章描述}"
+image: "${3:./cover.webp}"
+tags: [${4:标签}]
+category: ${5:技术}
+draft: ${6:$$(yas-choose-value '("false" "true"))}
+pinned: ${7:$$(yas-choose-value '("false" "true"))}
+---
+
+$0

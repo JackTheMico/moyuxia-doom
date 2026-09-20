@@ -80,3 +80,8 @@
 ;; TODO 关键字 / 标签 / 时间戳 / 表格 / src block fringe，可替代
 ;; org-superstar 与 org-bullets（比 svg-tag-mode 高效，不生成图片）。
 (package! org-modern)
+
+;; ---- Markdown & 中文排版美化（valign 表格像素对齐 + pangu-spacing 盘古之白）----
+(package! valign)
+(package! pangu-spacing)
+

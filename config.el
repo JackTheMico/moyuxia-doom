@@ -827,15 +827,36 @@
        :desc "Forge dispatch"     "'" #'forge-dispatch))
 
 ;; ============================================================================
-;; CloudFlare-ImgBed：上传图片并插入 URL（写 firefly 博客时自动图床）
-;; 依赖：系统已装 curl；Emacs 27+（原生 json-parse-buffer）
-;;   SPC i u  = 选本地图片文件异步上传并插入链接（不阻塞 Emacs）
-;;   SPC i p  = 粘贴剪贴板图片（Wayland 用 wl-paste / X11 用 xclip）并插入
-;; token 从 ~/.authinfo.gpg 读取（machine = my/imgbed-auth-host），明文不落配置。
-;; 图床 API 契约（已核对源码）：POST /upload，multipart 字段名 file，
-;;   ?returnFormat=full 返回绝对 URL，响应为 JSON 数组 [{ "src": "<url>" }]。
-;; 参考调研：.workbuddy/research/cloudflare-imgbed-emacs-upload.md
+;; Markdown 博客排版与沉浸专注增强（valign + pangu-spacing + olivetti + mixed-pitch）
 ;; ============================================================================
+(after! markdown-mode
+  (setq markdown-fontify-whole-heading-line t
+        markdown-fontify-code-blocks-natively t
+        markdown-max-image-size '(800 . 600)
+        markdown-display-remote-images t)
+
+  (add-hook! '(markdown-mode-hook gfm-mode-hook)
+    #'olivetti-mode
+    #'mixed-pitch-mode
+    #'valign-mode
+    #'pangu-spacing-mode))
+
+(after! pangu-spacing
+  ;; 仅在渲染层添加视觉垫空（overlay），绝不向文件写入实体空格，避免污染 Git diff 与 Frontmatter
+  (setq pangu-spacing-real-insert-separtor nil))
+
+(after! olivetti
+  (setq-default olivetti-body-width 88
+                olivetti-minimum-body-width 60))
+
+;; ============================================================================
+;; CloudFlare-ImgBed 图床异步上传与 Firefly 博客写作工作流
+;; 依赖：系统已装 curl；Wayland 用 wl-paste，X11 用 xclip
+;; Token 从 ~/.authinfo.gpg 读取（machine = my/imgbed-auth-host），明文不落配置。
+;; ============================================================================
+(defcustom my/imgbed-host "https://jackwyimgbed.dlwxxxdlw.workers.dev"
+  "CloudFlare-ImgBed 主机根地址。")
+
 (defcustom my/imgbed-endpoint "https://jackwyimgbed.dlwxxxdlw.workers.dev/upload"
   "CloudFlare-ImgBed 上传端点。本仓库为 /upload（Cloudflare Pages/Worker 路由）。")
 
@@ -844,18 +865,14 @@
 Token 在每次上传时惰性读取，避免 Emacs 启动阶段触发 gpg 解密而卡住。")
 
 (defcustom my/imgbed-token nil
-  "API Token 覆盖值。nil（默认）= 上传时从 ~/.authinfo.gpg 读取。
-直接填字面量也可，但不推荐（明文写在配置里）。")
+  "API Token 覆盖值。nil（默认）= 上传时从 ~/.authinfo.gpg 读取。")
 
 (defcustom my/imgbed-authcode nil
   "用户端 authCode（若不用 API Token，则在后台 Security 配置后填这里，或用 ?authCode= 头）。")
 
 (defun my/imgbed--token ()
   "返回可用的 API Token：优先 `my/imgbed-token'，否则从 auth-source 读取。
-对应 ~/.authinfo.gpg 中 machine = `my/imgbed-auth-host' 的 password 字段。
-使用 auth-source-search 底层 API，避免依赖 auth-source-password 的 autoload
-（后者在 -Q/某些环境下未注册会导致 void-function）。secret 可能为函数（gpg）或
-字符串（明文），二者都处理。"
+对应 ~/.authinfo.gpg 中 machine = `my/imgbed-auth-host' 的 password 字段。"
   (or my/imgbed-token
       (ignore-errors
         (require 'auth-source nil t)
@@ -865,25 +882,31 @@ Token 在每次上传时惰性读取，避免 Emacs 启动阶段触发 gpg 解�
 
 (defun my/imgbed--extract-url (json-str)
   "从 CloudFlare-ImgBed 响应 JSON 数组中提取第一项的 src（或 publicUrl）。
-解析失败（非预期响应）时返回 nil，由调用方处理。"
+若 src 为相对路径（如 /file/...），自动补全图床域名。"
   (condition-case nil
       (let* ((data (with-temp-buffer
                      (insert json-str)
                      (goto-char (point-min))
                      (json-parse-buffer :object-type 'alist :array-type 'list)))
              (first (car data))
-             (src (alist-get 'src first)))
-        (or src (alist-get 'publicUrl first)))
+             (src (or (alist-get 'src first) (alist-get 'publicUrl first))))
+        (when (and src (stringp src) (not (string-empty-p src)))
+          (if (string-prefix-p "http" src)
+              src
+            (concat (string-remove-suffix "/" my/imgbed-host) src))))
     (error nil)))
 
-(defun my/imgbed-upload-async (file &optional delete-after)
-  "异步上传 FILE 到图床；完成后回到调用处的 buffer/point 插入链接。
-DELETE-AFTER 非 nil 时，上传结束（无论成败）删除该临时文件。
-Org mode 插 [[url][name]]，其它模式插 ![name](url)。不阻塞 Emacs。"
+(defun my/imgbed-upload-async (file &optional delete-after custom-alt)
+  "异步上传 FILE 到图床；完成后在调用处的 marker 插入链接。
+DELETE-AFTER 非 nil 时，上传结束（无论成败）删除临时文件。
+CUSTOM-ALT 优先作为 Markdown alt 描述；若未提供则提示输入。"
   (let* ((buf (current-buffer))
-         (pt (point))
+         (marker (copy-marker (point)))
          (mode (if (derived-mode-p 'org-mode) 'org 'md))
-         (name (file-name-nondirectory file))
+         (default-name (file-name-sans-extension (file-name-nondirectory file)))
+         (alt (or custom-alt
+                  (read-string (format "图片描述 (Alt Text，默认 %s): " default-name)
+                               nil nil default-name)))
          (url (concat my/imgbed-endpoint "?returnFormat=full"))
          (token (my/imgbed--token))
          (args (list "-s" "-F" (concat "file=@" (expand-file-name file)))))
@@ -892,7 +915,7 @@ Org mode 插 [[url][name]]，其它模式插 ![name](url)。不阻塞 Emacs。"
     (when my/imgbed-authcode
       (setq args (append args (list "-H" (concat "authCode: " my/imgbed-authcode)))))
     (setq args (append args (list url)))
-    (message "Uploading %s ..." name)
+    (message "正在上传图片至图床: %s ..." (file-name-nondirectory file))
     (make-process
      :name "imgbed-upload"
      :buffer (generate-new-buffer " *imgbed-upload*")
@@ -903,41 +926,120 @@ Org mode 插 [[url][name]]，其它模式插 ![name](url)。不阻塞 Emacs。"
          (let* ((status (process-exit-status proc))
                 (out (with-current-buffer (process-buffer proc)
                        (buffer-string)))
-                (url (my/imgbed--extract-url out)))
+                (final-url (my/imgbed--extract-url out)))
            (kill-buffer (process-buffer proc))
            (when delete-after (ignore-errors (delete-file file)))
-           (if (or (/= 0 status) (null url) (string-empty-p (string-trim url)))
+           (if (or (/= 0 status) (null final-url) (string-empty-p (string-trim final-url)))
                (message "图床上传失败（curl exit %d）：%s" status (string-trim out))
+             ;; 复制到系统剪贴板（便于粘贴至 Frontmatter 的 image: 封面）
+             (kill-new final-url)
              (if (buffer-live-p buf)
                  (with-current-buffer buf
                    (save-excursion
-                     (goto-char pt)
+                     (goto-char (marker-position marker))
                      (insert (if (eq mode 'org)
-                                 (format "[[%s][%s]]" url name)
-                               (format "![%s](%s)" name url)))))
-               (message "原 buffer 已关闭，URL：%s" url))
-             (message "Inserted %s" url))))))))
+                                 (format "[[%s][%s]]\n" final-url alt)
+                               (format "![%s](%s)\n" alt final-url))))
+                   (set-marker marker nil)
+                   (when (and (eq mode 'md) (display-images-p) (fboundp 'markdown-display-inline-images))
+                     (ignore-errors (markdown-display-inline-images)))
+                   (message "图床上传成功并已复制 URL: %s" final-url))
+               (message "原 buffer 已关闭，上传成功 URL: %s" final-url)))))))))
 
-(defun my/imgbed-insert (file)
-  "选本地图片文件异步上传并在 point 插入链接。"
-  (interactive "fImage file: ")
+(defun +firefly/imgbed-upload-file (file)
+  "选本地图片文件异步上传至图床，并在 point 插入 Markdown 链接。"
+  (interactive "f图片文件: ")
   (my/imgbed-upload-async (expand-file-name file)))
 
-(defun my/imgbed-paste-clipboard ()
-  "把剪贴板里的图片落临时文件并异步上传，在 point 插入 URL。
-Wayland 用 wl-paste，X11 用 xclip；二者均需在系统上安装。"
+(defun +firefly/imgbed-upload-clipboard ()
+  "抓取系统剪贴板图片落临时文件并异步上传至图床，在 point 插入 Markdown 链接。"
   (interactive)
   (let ((tmp (make-temp-file "imgbed-" nil ".png")))
-    (if (getenv "WAYLAND_DISPLAY")
-        (call-process "wl-paste" nil nil nil "-t" "image/png" "-o" tmp) ; Wayland
-      (call-process "xclip" nil nil nil                          ; X11
-                    "-selection" "clipboard" "-t" "image/png" "-o" tmp))
+    (cond
+     ((getenv "WAYLAND_DISPLAY")
+      (call-process "wl-paste" nil nil nil "-t" "image/png" "-o" tmp))
+     ((executable-find "wl-paste")
+      (call-process "wl-paste" nil nil nil "-t" "image/png" "-o" tmp))
+     ((executable-find "xclip")
+      (call-process "xclip" nil nil nil "-selection" "clipboard" "-t" "image/png" "-o" tmp))
+     (t (user-error "未检测到剪贴板工具（wl-paste 或 xclip）")))
     (if (and (file-exists-p tmp) (> (file-attribute-size (file-attributes tmp)) 0))
         (my/imgbed-upload-async tmp t)
-      (user-error "剪贴板中没有图片（或 wl-paste/xclip 未安装）"))))
+      (when (file-exists-p tmp) (delete-file tmp))
+      (user-error "剪贴板中未检测到图片（或未成功保存）"))))
 
+;; 保持向后兼容别名
+(defalias 'my/imgbed-insert #'+firefly/imgbed-upload-file)
+(defalias 'my/imgbed-paste-clipboard #'+firefly/imgbed-upload-clipboard)
+
+;; 本地 Page Bundle 截图快速粘贴（离线保存为相对路径）
+(defun +firefly/markdown-paste-clipboard-image ()
+  "从系统剪贴板粘贴图片，保存到当前博客 Page Bundle 目录并插入相对路径 Markdown 语法。"
+  (interactive)
+  (unless buffer-file-name
+    (user-error "当前 Buffer 未关联到具体文件，无法确定图片保存路径"))
+  (let* ((post-dir (file-name-directory buffer-file-name))
+         (is-bundle (string-equal (file-name-nondirectory buffer-file-name) "index.md"))
+         (img-dir (if is-bundle
+                      post-dir
+                    (expand-file-name "images" post-dir)))
+         (time-str (format-time-string "%Y%m%d-%H%M%S"))
+         (filename (format "img-%s.png" time-str))
+         (filepath (expand-file-name filename img-dir))
+         (rel-path (file-relative-name filepath post-dir)))
+    (unless (file-directory-p img-dir)
+      (make-directory img-dir t))
+    (cond
+     ((getenv "WAYLAND_DISPLAY")
+      (call-process "wl-paste" nil nil nil "--type" "image/png" "--output" filepath))
+     ((executable-find "wl-paste")
+      (call-process "wl-paste" nil nil nil "--type" "image/png" "--output" filepath))
+     ((executable-find "xclip")
+      (call-process "xclip" nil nil nil "-selection" "clipboard" "-target" "image/png" "-out" filepath))
+     (t (user-error "未检测到 wl-paste 或 xclip，请先安装剪贴板工具")))
+    (if (and (file-exists-p filepath) (> (file-attribute-size (file-attributes filepath)) 0))
+        (let ((alt (read-string (format "图片描述 (Alt Text，默认 %s): " filename) nil nil filename)))
+          (insert (format "![%s](%s)\n" (if (string-empty-p alt) filename alt) rel-path))
+          (message "图片已保存至: %s" rel-path)
+          (when (and (display-images-p) (fboundp 'markdown-display-inline-images))
+            (ignore-errors (markdown-display-inline-images))))
+      (when (file-exists-p filepath) (delete-file filepath))
+      (user-error "剪贴板中未检测到图片或图片保存失败"))))
+
+;; Astro 本地 Dev Server 实时预览联动
+(defun +firefly/open-post-in-browser ()
+  "在默认浏览器中打开当前 Firefly 博客文章的本地实时预览页面 (http://localhost:4321)。"
+  (interactive)
+  (let* ((filename (buffer-file-name))
+         (post-slug (when (and filename (string-match "src/content/posts/\\([^/.]+\\)" filename))
+                      (match-string 1 filename))))
+    (if post-slug
+        (progn
+          (message "正在打开本地预览: http://localhost:4321/posts/%s" post-slug)
+          (browse-url (format "http://localhost:4321/posts/%s" post-slug)))
+      (message "未能从当前路径识别文章 slug，打开博客主页: http://localhost:4321")
+      (browse-url "http://localhost:4321"))))
+
+;; ============================================================================
+;; Meow 键位绑定：NORMAL 态单键 Localleader (,) 与 Markdown 博客专属前缀
+;; ============================================================================
+(after! meow
+  ;; NORMAL 态单键 , 触发 Localleader (C-c c)
+  (meow-define-keys 'normal '("," . "C-c c")))
+
+
+(map! :map (markdown-mode-map gfm-mode-map)
+      :localleader
+      :desc "Astro 本地实时预览"   "p" #'+firefly/open-post-in-browser
+      :desc "粘贴本地 Page Bundle 图片" "P" #'+firefly/markdown-paste-clipboard-image
+      (:prefix ("u" . "upload-imgbed")
+       :desc "上传剪贴板图片至图床" "c" #'+firefly/imgbed-upload-clipboard
+       :desc "选择本地图片上传至图床" "f" #'+firefly/imgbed-upload-file))
+
+;; 全局 SPC i 图床快捷入口保留
 (map! :leader
       (:prefix ("i" . "imgbed")
-       :desc "Upload image file & insert URL" "u" #'my/imgbed-insert
-       :desc "Paste clipboard image & insert URL" "p" #'my/imgbed-paste-clipboard))
+       :desc "Upload image file & insert URL" "u" #'+firefly/imgbed-upload-file
+       :desc "Paste clipboard image & insert URL" "p" #'+firefly/imgbed-upload-clipboard))
+
 
