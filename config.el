@@ -1043,6 +1043,93 @@ CUSTOM-ALT 优先作为 Markdown alt 描述；若未提供则提示输入。"
         (meow-insert-mode 1))
       (message "已创建动态: %s" filename))))
 
+;; ----------------------------------------------------------------------------
+;; 新建博客文章（单文件范式）：frontmatter 单一真源，命令与文件模板共用
+;; ----------------------------------------------------------------------------
+
+(defcustom +firefly-posts-default-subdir "writing"
+  "新建文章时的默认子目录（相对于 posts 集合根目录）。
+该目录不存在时由 `+firefly/new-post' 自动创建。")
+
+(defun +firefly--posts-dir ()
+  "返回 Firefly 博客 posts 集合根目录。"
+  (expand-file-name "src/content/posts" +firefly-blog-dir))
+
+(defun +firefly-post-frontmatter (slug)
+  "为 SLUG 生成 Firefly posts 集合的 frontmatter 字符串。
+字段集对齐仓库现有文章：不写 draft，交由 `src/content.config.ts' 的 Zod 默认值处理。"
+  (format "---\ntitle: %s\npublished: %s\ndescription: \"\"\nimage: \"\"\ntags: []\ncategory:\n---\n\n"
+          slug
+          (format-time-string "%Y-%m-%d")))
+
+(defun +firefly--post-slug-read ()
+  "读取并校验文章 slug；非法时 `user-error'。"
+  (let ((slug (string-trim (read-string "文章 slug: "))))
+    (when (or (string-empty-p slug)
+              (string-match-p "[/\\\\[:space:]]" slug))
+      (user-error "slug 非法（不可为空，且不可含 / \\ 或空白字符）: %S" slug))
+    slug))
+
+(defun +firefly--post-subdir-read ()
+  "交互选择文章子目录，返回目录名（相对于 posts 集合根目录）。"
+  (let* ((posts-dir (+firefly--posts-dir))
+         (candidates (when (file-directory-p posts-dir)
+                       (seq-filter #'file-directory-p
+                                   (directory-files posts-dir t "\\`[^.]")))))
+    (completing-read "文章目录: "
+                     (mapcar #'file-name-nondirectory candidates)
+                     nil nil +firefly-posts-default-subdir)))
+
+(defun +firefly--post-insert-frontmatter (&optional slug)
+  "在当前空 buffer 写入 frontmatter，并把光标停在正文首行。
+SLUG 省略时取当前文件 basename（文件模板路径用）。非空 buffer 不做任何事，
+返回非 nil 表示确实写入了内容。"
+  (when (= (buffer-size) 0)
+    (insert (+firefly-post-frontmatter
+             (or slug
+                 (file-name-base (or (buffer-file-name) "")))))
+    (goto-char (point-max))
+    t))
+
+(defun +firefly/new-post ()
+  "在 Firefly 博客 posts 集合下新建单文件文章。
+交互选择子目录与 slug，写入标准 frontmatter 后光标停在正文首行，并自动进入
+Meow INSERT 态。目标文件已存在时报错拒绝，不覆盖、不打开。"
+  (interactive)
+  (let* ((posts-dir (+firefly--posts-dir))
+         (subdir (+firefly--post-subdir-read))
+         (dir (expand-file-name (if (string-empty-p subdir)
+                                    +firefly-posts-default-subdir
+                                  subdir)
+                                posts-dir))
+         (slug (+firefly--post-slug-read))
+         (filepath (expand-file-name (concat slug ".md") dir)))
+    ;; 文件已落盘，或已有未保存的同路径 buffer（上一次调用留下的）时拒绝
+    (when (or (file-exists-p filepath)
+              (find-buffer-visiting filepath))
+      (user-error "文章已存在，未创建: %s" filepath))
+    (unless (file-directory-p dir)
+      (make-directory dir t))
+    (find-file filepath)
+    (when (+firefly--post-insert-frontmatter slug)
+      (when (fboundp 'meow-insert-mode)
+        (meow-insert-mode 1))
+      (message "已创建文章: %s"
+               (file-relative-name filepath +firefly-blog-dir)))))
+
+;; 文件模板：在 posts 集合下用任意方式新建空 .md 时注入同一份 frontmatter。
+;; 触发条件由 Doom 保证（buffer 为空、文件不存在、未被修改），现有文章不受影响。
+(set-file-template! "/Firefly/src/content/posts/.+\\.md\\'"
+  :mode 'markdown-mode
+  :trigger (lambda ()
+             (when (and buffer-file-name
+                        (not (file-exists-p buffer-file-name)))
+               (insert (+firefly-post-frontmatter
+                        (file-name-base buffer-file-name)))
+               (goto-char (point-max))
+               (when (fboundp 'meow-insert-mode)
+                 (meow-insert-mode 1)))))
+
 ;; ============================================================================
 ;; Meow 键位绑定：NORMAL 态单键 Localleader (,) 与 Markdown 博客专属前缀
 ;; ============================================================================
@@ -1059,7 +1146,8 @@ CUSTOM-ALT 优先作为 Markdown alt 描述；若未提供则提示输入。"
        :desc "上传剪贴板图片至图床" "c" #'+firefly/imgbed-upload-clipboard
        :desc "选择本地图片上传至图床" "f" #'+firefly/imgbed-upload-file)
       (:prefix ("n" . "new")
-       :desc "新建 Firefly 动态" "d" #'+firefly/new-dynamic))
+       :desc "新建 Firefly 动态" "d" #'+firefly/new-dynamic
+       :desc "新建博客文章" "p" #'+firefly/new-post))
 
 ;; 全局 SPC i 图床快捷入口保留
 (map! :leader
